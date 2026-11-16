@@ -1,0 +1,69 @@
+<?php
+require __DIR__.'/lib.php';
+$page=(string)($_GET['page']??'home');
+$allowed=['home','signup','login','profile','members','connections','messages'];
+if(!in_array($page,$allowed,true))$page='home';
+if($_SERVER['REQUEST_METHOD']==='POST'){
+ check_csrf(); $action=(string)($_POST['action']??'');
+ try {
+  if($action==='signup'){
+   $name=trim((string)($_POST['name']??''));$email=strtolower(trim((string)($_POST['email']??'')));$pass=(string)($_POST['password']??'');
+   if(!preg_match('/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/',$name)) throw new DomainException('Username must be 3–20 letters, digits or underscores, starting with a letter.');
+   if(!filter_var($email,FILTER_VALIDATE_EMAIL))throw new DomainException('Enter a valid email address.');
+   if(strlen($pass)<8)throw new DomainException('Password must contain at least 8 characters.');
+   mutate(function(&$d)use($name,$email,$pass){foreach($d['users'] as $u){if(strcasecmp($u['name'],$name)===0||$u['email']===$email)throw new DomainException('Username or email is already registered.');} $d['users'][$name]=['name'=>$name,'email'=>$email,'password'=>password_hash($pass,PASSWORD_DEFAULT),'bio'=>'','team'=>'General','joined'=>time()];});
+   session_regenerate_id(true);$_SESSION['user']=$name;flash('Account created! Welcome to ConnectHub.');go('home');
+  }
+  if($action==='login'){
+   $name=trim((string)($_POST['name']??''));$pass=(string)($_POST['password']??'');$d=db();$found=null;
+   foreach($d['users'] as $u){if(strcasecmp($u['name'],$name)===0){$found=$u;break;}}
+   if(!$found||!password_verify($pass,$found['password']))throw new DomainException('Invalid username or password.');
+   session_regenerate_id(true);$_SESSION['user']=$found['name'];flash('Welcome back, '.$found['name'].'!');go('home');
+  }
+  if($action==='logout'){$_SESSION=[];session_regenerate_id(true);flash('You have logged out.');go('login');}
+  $me=require_user();
+  if($action==='profile'){
+   $bio=trim((string)($_POST['bio']??''));$team=trim((string)($_POST['team']??''));
+   if(strlen($bio)>500||strlen($team)>50)throw new DomainException('Profile text is too long.');
+   mutate(function(&$d)use($me,$bio,$team){$d['users'][$me]['bio']=$bio;$d['users'][$me]['team']=$team?:'General';});flash('Profile saved.');go('profile');
+  }
+  if($action==='post'){
+   $body=trim((string)($_POST['body']??''));if($body===''||strlen($body)>1000)throw new DomainException('Post must contain 1–1000 characters.');
+   mutate(function(&$d)use($me,$body){$d['posts'][]=['id'=>bin2hex(random_bytes(8)),'author'=>$me,'body'=>$body,'time'=>time()];});flash('Your update was published.');go('home');
+  }
+  if($action==='follow'){
+   $target=(string)($_POST['target']??'');
+   mutate(function(&$d)use($me,$target){if($target===$me||!isset($d['users'][$target]))throw new DomainException('Invalid member.');$key=$me.'|'.$target;if(isset($d['follows'][$key]))unset($d['follows'][$key]);else $d['follows'][$key]=['from'=>$me,'to'=>$target];});go('members');
+  }
+  if($action==='message'){
+   $to=(string)($_POST['to']??'');$body=trim((string)($_POST['body']??''));
+   if($body===''||strlen($body)>1000)throw new DomainException('Message must contain 1–1000 characters.');
+   mutate(function(&$d)use($me,$to,$body){if($to===$me||!isset($d['users'][$to]))throw new DomainException('Choose another member.');$d['messages'][]=['from'=>$me,'to'=>$to,'body'=>$body,'time'=>time()];});flash('Private message sent.');go('messages');
+  }
+  throw new DomainException('Unknown action.');
+ }catch(DomainException $ex){flash($ex->getMessage(),'error');go(in_array($page,$allowed,true)?$page:'home');}
+}
+$d=db();$me=user();$profile=$me?($d['users'][$me]??null):null;
+if(!$me&&!in_array($page,['signup','login'],true))$page='login';
+if($me&&in_array($page,['signup','login'],true))$page='home';
+$notice=$_SESSION['flash']??null;unset($_SESSION['flash']);
+function action(string $name): string {return '<input type="hidden" name="csrf" value="'.e(csrf()).'"><input type="hidden" name="action" value="'.e($name).'">';}
+?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ConnectHub — <?=e(ucfirst($page))?></title><link rel="stylesheet" href="assets/style.css"></head><body>
+<header class="topbar"><div class="shell top-inner"><a class="brand" href="index.php"><span class="brand-mark">✦</span> Connect<span>Hub</span></a><?php if($me): ?><nav aria-label="Main navigation"><a class="<?=active('home',$page)?>" href="?page=home">Feed</a><a class="<?=active('members',$page)?>" href="?page=members">Members</a><a class="<?=active('connections',$page)?>" href="?page=connections">Connections</a><a class="<?=active('messages',$page)?>" href="?page=messages">Messages</a><a class="<?=active('profile',$page)?>" href="?page=profile">Profile</a></nav><div class="account"><?=avatar($me,'small')?><span><?=e($me)?></span><form method="post"><?=action('logout')?><button class="text-btn" type="submit">Log out</button></form></div><?php else: ?><div class="auth-links"><a href="?page=login">Log in</a><a class="button small" href="?page=signup">Join now</a></div><?php endif; ?></div></header>
+<main class="shell <?=(in_array($page,['signup','login'],true)?'auth-main':'main')?>">
+<?php if($notice): ?><div class="notice <?=e($notice['type'])?>" role="status"><?=e($notice['message'])?></div><?php endif; ?>
+<?php if($page==='signup'||$page==='login'): ?>
+<div class="auth-layout"><section class="hero-panel"><span class="eyebrow">YOUR WORKPLACE, CONNECTED</span><h1>Great teams start with <em>great connections.</em></h1><p>Share ideas, celebrate wins, and get to know the people behind the work.</p><div class="hero-decor"><span>✦</span><span>●</span><span>✧</span></div></section><section class="card auth-card"><span class="eyebrow"><?= $page==='signup'?'GET STARTED':'WELCOME BACK' ?></span><h2><?= $page==='signup'?'Create your account':'Sign in to ConnectHub' ?></h2><p class="muted">Your team's space to connect and collaborate.</p><form method="post" class="stack"><?=action($page==='signup'?'signup':'login')?><?php if($page==='signup'): ?><label>Work email<input type="email" name="email" placeholder="you@company.com" autocomplete="email" required></label><?php endif; ?><label>Username<input name="name" placeholder="e.g. alex_smith" minlength="3" maxlength="20" autocomplete="username" required></label><label>Password<input type="password" name="password" minlength="8" placeholder="At least 8 characters" autocomplete="<?=$page==='signup'?'new-password':'current-password'?>" required></label><button class="button wide" type="submit"><?= $page==='signup'?'Create account':'Sign in' ?></button></form><p class="switch"><?= $page==='signup'?'Already a member? <a href="?page=login">Log in</a>':'New to ConnectHub? <a href="?page=signup">Create an account</a>' ?></p></section></div>
+<?php elseif($page==='home'): ?>
+<div class="welcome"><div><span class="eyebrow">COMMUNITY DASHBOARD</span><h1>Good to see you, <?=e($me)?> <span class="wave">✦</span></h1><p>Here's what's happening around your team.</p></div><span class="date-pill"><?=e(date('l, F j'))?></span></div>
+<div class="layout"><div class="primary"><section class="card composer"><div class="section-head"><?=avatar($me) ?><div><strong>Share something with your team</strong><p class="muted tiny">Updates, ideas, celebrations — all welcome.</p></div></div><form method="post"><?=action('post')?><textarea name="body" rows="3" maxlength="1000" placeholder="What's on your mind?" required></textarea><div class="form-bottom"><span class="muted tiny">Visible to all members</span><button class="button" type="submit">Publish update →</button></div></form></section><div class="section-title"><h2>Community feed</h2><span class="muted"><?=count($d['posts'])?> posts</span></div>
+<?php foreach(array_reverse($d['posts']) as $post): ?><article class="card post"><div class="section-head"><?=avatar($post['author'])?><div><strong><?=e($post['author'])?></strong><p class="muted tiny"><?=e(date('M j, Y · g:i a',$post['time']))?></p></div></div><p class="post-body"><?=nl2br(e($post['body']))?></p></article><?php endforeach; ?><?php if(!$d['posts']): ?><div class="card empty"><span class="empty-icon">✍</span><h3>Your feed starts here</h3><p>Be the first to share an update with your team.</p></div><?php endif; ?></div><aside class="sidebar"><section class="card side-card"><span class="eyebrow">YOUR PROFILE</span><div class="profile-mini"><?=avatar($me,'large')?><h3><?=e($me)?></h3><p class="muted"><?=e($profile['team']??'General')?> team</p></div><a class="outline-button" href="?page=profile">Edit profile →</a></section><section class="card side-card"><span class="eyebrow">COMMUNITY SNAPSHOT</span><div class="stat"><strong><?=count($d['users'])?></strong><span>Team members</span></div><div class="stat"><strong><?=count($d['posts'])?></strong><span>Community updates</span></div><div class="stat"><strong><?=count(array_filter($d['follows'],fn($f)=>$f['from']===$me))?></strong><span>People you follow</span></div></section></aside></div>
+<?php elseif($page==='profile'): ?>
+<div class="page-heading"><span class="eyebrow">PERSONAL SPACE</span><h1>Your profile</h1><p>Let your teammates get to know you.</p></div><div class="layout"><section class="card primary profile-card"><div class="profile-banner"></div><div class="profile-details"><?=avatar($me,'xl')?><h2><?=e($me)?></h2><p class="muted"><?=e($profile['team'])?> team · Member since <?=e(date('M Y',$profile['joined']))?></p><p><?=e($profile['bio']?:'Add a little introduction about yourself below.')?></p></div><hr><h3>Edit profile</h3><form method="post" class="stack"><?=action('profile')?><label>Team or department<input name="team" maxlength="50" value="<?=e($profile['team'])?>" placeholder="Engineering"></label><label>About me<textarea name="bio" rows="5" maxlength="500" placeholder="What do you work on? What do you enjoy?"><?=e($profile['bio'])?></textarea></label><button class="button" type="submit">Save changes</button></form></section><aside class="sidebar"><section class="card side-card"><h3>Profile tips</h3><p class="muted">Share your role, interests, and what you're excited to work on. This helps coworkers find common ground.</p></section></aside></div>
+<?php elseif($page==='members'): ?>
+<div class="page-heading"><span class="eyebrow">PEOPLE FIRST</span><h1>Meet the team</h1><p>Discover colleagues and grow your network.</p></div><div class="member-grid"><?php foreach($d['users'] as $u):if($u['name']===$me)continue;$key=$me.'|'.$u['name'];?><article class="card member-card"><?=avatar($u['name'],'large')?><h3><?=e($u['name'])?></h3><p class="muted"><?=e($u['team'])?> team</p><p class="bio-preview"><?=e($u['bio']?:'Here to connect and collaborate.')?></p><form method="post"><?=action('follow')?><input type="hidden" name="target" value="<?=e($u['name'])?>"><button class="<?=isset($d['follows'][$key])?'outline-button':'button'?> wide" type="submit"><?=isset($d['follows'][$key])?'✓ Following · Unfollow':'+ Follow member'?></button></form></article><?php endforeach; ?></div><?php if(count($d['users'])<=1):?><div class="card empty"><h3>You're the first member!</h3><p>Create another test account in a private browser window to try following and messaging.</p></div><?php endif; ?>
+<?php elseif($page==='connections'): ?>
+<div class="page-heading"><span class="eyebrow">YOUR NETWORK</span><h1>Connections</h1><p>People you follow and teammates following you.</p></div><div class="two-col"><?php foreach(['Following'=>'from','Followers'=>'to'] as $heading=>$field):?><section class="card list-card"><h2><?=e($heading)?></h2><?php $found=false;foreach($d['follows'] as $f):if($f[$field]!==$me)continue;$found=true;$other=$f[$field==='from'?'to':'from'];?><div class="person-line"><?=avatar($other)?><div><strong><?=e($other)?></strong><p class="muted tiny"><?=e($d['users'][$other]['team']??'General')?> team</p></div></div><?php endforeach;if(!$found):?><p class="muted">No connections here yet. Visit the Members page to get started.</p><?php endif;?></section><?php endforeach;?></div>
+<?php elseif($page==='messages'): ?>
+<div class="page-heading"><span class="eyebrow">STAY IN TOUCH</span><h1>Private messages</h1><p>One-to-one conversations between team members.</p></div><div class="layout"><section class="card primary message-card"><h2>Send a message</h2><form method="post" class="stack"><?=action('message')?><label>To<select name="to" required><option value="">Choose a teammate</option><?php foreach($d['users'] as $u):if($u['name']!==$me):?><option value="<?=e($u['name'])?>"><?=e($u['name'])?></option><?php endif;endforeach;?></select></label><label>Message<textarea name="body" rows="4" maxlength="1000" required placeholder="Write a friendly message..."></textarea></label><button class="button" type="submit">Send private message →</button></form><hr><h2>Your inbox</h2><?php $messages=array_reverse(array_values(array_filter($d['messages'],fn($m)=>$m['from']===$me||$m['to']===$me)));foreach($messages as $m):?><article class="message-item"><div class="section-head"><?=avatar($m['from'])?><div><strong><?=e($m['from'])?> → <?=e($m['to'])?></strong><p class="muted tiny"><?=e(date('M j, Y · g:i a',$m['time']))?></p></div></div><p><?=nl2br(e($m['body']))?></p></article><?php endforeach;if(!$messages):?><p class="muted">No messages yet. Send a hello to a teammate!</p><?php endif;?></section><aside class="sidebar"><section class="card side-card"><h3>Private by design</h3><p class="muted">Messages are shown only to their sender and recipient, not in the public feed.</p></section></aside></div>
+<?php endif;?></main><footer class="footer"><div class="shell">ConnectHub <span>·</span> Bringing people together, one connection at a time. <span>·</span> Student project</div></footer></body></html>
